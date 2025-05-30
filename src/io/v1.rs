@@ -165,7 +165,11 @@ impl GasFileWriter {
             .store(true, std::sync::atomic::Ordering::Relaxed);
 
         let mut file = fs::File::create(&self.fname).unwrap();
+        println!("create file success: {:?}", &self.fname);
         file.write_all(&GAS_FILE_VERSION.to_le_bytes()).unwrap();
+        file.flush().unwrap();
+        // file.set_len(1024 * 1024 * 1024 * 30).unwrap();
+        drop(file);
 
         for idx in 0..self.threads {
             let handler = {
@@ -186,7 +190,6 @@ impl GasFileWriter {
     fn write_worker(self: &Arc<Self>, idx: usize) {
         let mut file = fs::OpenOptions::new()
             .write(true)
-            .create(true)
             .open(&self.fname)
             .unwrap();
         let recv = self.writer_recv.clone();
@@ -287,7 +290,7 @@ impl GasFileReader {
         file.seek(std::io::SeekFrom::Start(4)).unwrap();
         file.read_exact(&mut meta_len).unwrap();
         let meta_len = u32::from_le_bytes(meta_len);
-        println!("version:{}, metalen:{}", version, meta_len);
+        // println!("version:{}, metalen:{}", version, meta_len);
         file.seek(std::io::SeekFrom::Start(8)).unwrap();
         let mut positions_meta = vec![0_u8; meta_len as usize];
         file.read_exact(&mut positions_meta).unwrap();
@@ -381,7 +384,7 @@ impl GasFileReader {
             let len = position.write_positions[position.write_position_cursor + 1] - start;
             position.write_position_cursor += 1;
 
-            println!("reader: start:{},len:{}", start, len);
+            // println!("reader: start:{},len:{}", start, len);
 
             (start, len)
         };
@@ -395,8 +398,9 @@ impl GasFileReader {
 
 #[cfg(test)]
 mod test {
-    use std::{num::NonZero, time::Duration};
+    use std::num::NonZero;
 
+    use gskits::ds::ReadInfo;
     use tempfile::NamedTempFile;
 
     use super::{GasFileReader, GasFileWriter, get_bincode_cfg};
@@ -433,4 +437,5 @@ mod test {
         results.sort();
         println!("{:?}", results);
     }
+
 }

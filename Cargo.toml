@@ -7,6 +7,12 @@ edition = "2024"
 serde = {version="1", features = ["derive"]}
 crossbeam = "0.8"
 bincode={version="2", features = ["derive", "alloc"]}
+clap={version="4", features=["derive"]}
+rust-htslib = "0.49"
+gskits = "0.15"
 
 [dev-dependencies]
 tempfile = "3"
+
+
+# [target.'cfg(bin)'.dependencies]
