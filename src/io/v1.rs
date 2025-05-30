@@ -4,7 +4,7 @@ use std::{
     num::NonZero,
     ops::{Deref, DerefMut},
     path::{self, Path},
-    sync::{atomic::AtomicBool, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicBool},
     thread,
 };
 
@@ -52,7 +52,9 @@ struct Locations {
     pub cur_position: u64,
     pub write_positions: WritePositions,
     pub write_positions_meta: WritePositionsMeta,
-    pub meta_cursor: usize,
+
+    pub meta_cursor: usize, // this two cursor are for file reader, 下一个要处理哪块
+    pub write_position_cursor: usize,
 }
 
 #[allow(unused)]
@@ -63,6 +65,7 @@ impl Locations {
             write_positions: WritePositions::default(),
             write_positions_meta: WritePositionsMeta::default(),
             meta_cursor: 0,
+            write_position_cursor: 0,
         }
     }
 }
@@ -74,6 +77,7 @@ impl Default for Locations {
             write_positions: WritePositions(vec![]),
             write_positions_meta: WritePositionsMeta(vec![]),
             meta_cursor: 0,
+            write_position_cursor: 0,
         }
     }
 }
@@ -231,16 +235,15 @@ impl Drop for GasFileWriter {
     }
 }
 
-
 pub struct GasFileReader {
-    version: u32,
     threads: usize,
     fname: path::PathBuf,
     positions: Mutex<Locations>,
+    read_sender: Mutex<Option<Sender<Vec<u8>>>>,
 }
 
 impl GasFileReader {
-    pub fn new_reader<P>(p: P, threads: NonZero<usize>) -> Arc<Self>
+    pub fn new_reader<P>(p: P, threads: NonZero<usize>) -> (Arc<Self>, Receiver<Vec<u8>>)
     where
         P: AsRef<Path>,
     {
@@ -249,15 +252,92 @@ impl GasFileReader {
         let mut version_bytes = [0u8; 4];
         file.read_exact(&mut version_bytes).unwrap();
         let version = u32::from_le_bytes(version_bytes);
-        assert_eq!(version, GAS_FILE_VERSION, "Unsupported gas file version. expected {}, found {}", GAS_FILE_VERSION, version);
+        assert_eq!(
+            version, GAS_FILE_VERSION,
+            "Unsupported gas file version. expected {}, found {}",
+            GAS_FILE_VERSION, version
+        );
 
+        let (sender, recv) = crossbeam::channel::bounded(1000);
 
-        Arc::new(Self {
-            version,
-            fname: p.into(),
-            threads: threads.get(),
-            positions: Mutex::new(Locations::default()),
-        })
+        (
+            Self {
+                fname: p.into(),
+                threads: threads.get(),
+                positions: Mutex::new(Locations::default()),
+                read_sender: Mutex::new(sender.into()),
+            }
+            .into(),
+            recv,
+        )
     }
 
+    pub fn start_read_worker(self: &Arc<Self>) {
+        if let Some(sender) = self.read_sender.lock().unwrap().take() {
+            for _ in 0..self.threads {
+                thread::spawn({
+                    let reader = Arc::clone(&self);
+                    let sender = sender.clone();
+                    move || {
+                        reader.read_worker(sender);
+                    }
+                });
+            }
+        } else {
+            return;
+        }
+    }
+
+    pub fn read_worker(self: Arc<Self>, sender: Sender<Vec<u8>>) {
+        let mut file = fs::File::open(&self.fname).unwrap();
+        while let Some(data) = self.read(&mut file) {
+            sender.send(data).unwrap();
+        }
+        for _ in 0..self.threads {
+            thread::spawn({
+                let reader = Arc::clone(&self);
+                let sender = sender.clone();
+                move || {
+                    let mut file = fs::File::open(&reader.fname).unwrap();
+                    while let Some(data) = reader.read(&mut file) {
+                        sender.send(data).unwrap();
+                    }
+                }
+            });
+        }
+    }
+
+    pub fn read(self: &Arc<Self>, file: &mut fs::File) -> Option<Vec<u8>> {
+        let (start, len) = {
+            let mut position = self.positions.lock().unwrap();
+
+            // TODO: check it
+            if position.write_position_cursor + 2 >= position.write_positions.len() {
+                // read new write positions
+                if position.meta_cursor >= position.write_positions_meta.len() {
+                    return None;
+                }
+                let (start, len) = position.write_positions_meta[position.meta_cursor];
+                file.seek(std::io::SeekFrom::Start(start)).unwrap();
+                let mut buf = vec![0; len as usize];
+                file.read_exact(&mut buf).unwrap();
+                let (mut write_positions, nbytes): (WritePositions, usize) =
+                    bincode::decode_from_slice(&buf, get_bincode_cfg()).unwrap();
+                write_positions.push(start);
+
+                assert_eq!(nbytes, len as usize);
+                position.write_position_cursor = 0;
+                position.meta_cursor += 1;
+            }
+            let start = position.write_positions[position.write_position_cursor];
+            let len = position.write_positions[position.write_position_cursor] - start;
+            (start, len)
+        };
+
+        file.seek(std::io::SeekFrom::Start(start)).unwrap();
+        let mut buf = vec![0; len as usize];
+        file.read_exact(&mut buf).unwrap();
+
+        Some(buf)
+    }
 }
