@@ -19,7 +19,7 @@ fn vanilla_file_write(cli: &Cli) {
     let mut file = std::fs::File::create(&cli.out_path).expect("Unable to create file");
 
     let mut start = 0;
-    let buf_size = 1024 * 1024; // 1 MB buffer size
+    let buf_size = 4*  1024 * 1024; // 1 MB buffer size
     let instant = Instant::now();
     while start < data.len() {
         // Write data to the file
@@ -31,7 +31,7 @@ fn vanilla_file_write(cli: &Cli) {
     let elapsed = instant.elapsed().as_secs() as usize;
     let bytes_per_sec = (data_size / elapsed) as f64;
     let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
-    println!("MB per second: {:.2}MB/s", mb_per_sec); // 568MB/s
+    println!("MB per second: {:.2}MB/s", mb_per_sec); // 568MB/s . 4M block 640MB/s
 }
 
 fn main() {
