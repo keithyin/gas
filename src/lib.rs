@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 pub mod io;
 
-pub trait TGasData: Serialize + DeserializeOwned {
+pub trait TGasData: Serialize + DeserializeOwned + {
     fn obj_bytes(&self) -> usize {
         size_of_val(self)
     }

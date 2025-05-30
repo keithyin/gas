@@ -4,8 +4,8 @@ use std::{
     num::NonZero,
     ops::{Deref, DerefMut},
     path::{self, Path},
-    sync::{Arc, Mutex, atomic::AtomicBool},
-    thread,
+    sync::{Arc, Barrier, Mutex, MutexGuard, atomic::AtomicBool},
+    thread, usize,
 };
 
 use bincode::config::Configuration;
@@ -32,7 +32,7 @@ impl DerefMut for WritePositions {
     }
 }
 
-#[derive(Debug, Clone, Default, bincode::Encode)]
+#[derive(Debug, Clone, Default, bincode::Encode, bincode::Decode)]
 struct WritePositionsMeta(Vec<(u64, u64)>);
 impl Deref for WritePositionsMeta {
     type Target = Vec<(u64, u64)>;
@@ -68,6 +68,25 @@ impl Locations {
             write_position_cursor: 0,
         }
     }
+
+    ///
+    pub fn compute_write_position_and_serial_of_write_positions(
+        locations: &mut MutexGuard<'_, Locations>,
+    ) -> Option<(u64, Vec<u8>)> {
+        let cfg = get_bincode_cfg();
+        let cur_pos = locations.cur_position;
+        if locations.write_positions.is_empty() {
+            return None;
+        }
+        let serialize = bincode::encode_to_vec(&locations.write_positions, cfg).unwrap();
+        let write_pos = locations.cur_position;
+        locations.cur_position += serialize.len() as u64;
+
+        let write_pos_and_serial = (write_pos, serialize.len() as u64);
+        locations.write_positions_meta.push(write_pos_and_serial);
+        locations.write_positions.clear();
+        Some((write_pos, serialize))
+    }
 }
 
 impl Default for Locations {
@@ -82,6 +101,14 @@ impl Default for Locations {
     }
 }
 
+impl From<WritePositionsMeta> for Locations {
+    fn from(value: WritePositionsMeta) -> Self {
+        let mut res = Self::default();
+        res.write_positions_meta = value;
+        res
+    }
+}
+
 const GAS_FILE_VERSION: u32 = 1;
 
 /// 存储序列化的对象，核心实现是二级存储
@@ -93,11 +120,13 @@ const GAS_FILE_VERSION: u32 = 1;
 pub struct GasFileWriter {
     fname: path::PathBuf,
     threads: usize,
+    barrier: Barrier,
+
     positions: Mutex<Locations>,
     worker_threads_started_flag: AtomicBool,
     writer_recv: Receiver<Vec<u8>>,
-
     handlers: Mutex<Option<Vec<thread::JoinHandle<()>>>>,
+    writer_drop_barrier: Barrier,
 }
 
 impl GasFileWriter {
@@ -114,10 +143,12 @@ impl GasFileWriter {
             Self {
                 fname: p.into(),
                 threads: threads.get(),
+                barrier: Barrier::new(threads.get()),
                 positions: Mutex::new(Locations::default()),
                 worker_threads_started_flag: AtomicBool::new(false),
                 writer_recv: recv,
                 handlers: Mutex::new(Some(vec![])),
+                writer_drop_barrier: Barrier::new(2),
             }
             .into(),
             sender,
@@ -136,11 +167,11 @@ impl GasFileWriter {
         let mut file = fs::File::create(&self.fname).unwrap();
         file.write_all(&GAS_FILE_VERSION.to_le_bytes()).unwrap();
 
-        for _ in 0..self.threads {
+        for idx in 0..self.threads {
             let handler = {
                 let self_clone = Arc::clone(self);
                 thread::spawn(move || {
-                    self_clone.write_worker();
+                    self_clone.write_worker(idx);
                 })
             };
             self.handlers
@@ -152,7 +183,7 @@ impl GasFileWriter {
         }
     }
 
-    fn write_worker(self: &Arc<Self>) {
+    fn write_worker(self: &Arc<Self>, idx: usize) {
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -161,6 +192,36 @@ impl GasFileWriter {
         let recv = self.writer_recv.clone();
         for data in recv {
             self.write(&data, &mut file);
+        }
+        self.barrier.wait();
+        if idx == 0 {
+            let cfg = get_bincode_cfg();
+            {
+                let mut locations = self.positions.lock().unwrap();
+                if let Some((pos, serial)) =
+                    Locations::compute_write_position_and_serial_of_write_positions(&mut locations)
+                {
+                    file.seek(std::io::SeekFrom::Start(pos)).unwrap();
+                    file.write_all(&serial).unwrap()
+                }
+            }
+
+            // println!(
+            //     "write_positions_meta:{:?}",
+            //     &self.positions.lock().unwrap().write_positions_meta
+            // );
+
+            let serialize =
+                bincode::encode_to_vec(&self.positions.lock().unwrap().write_positions_meta, cfg)
+                    .unwrap();
+            // println!("write_positions_meta_serial_len:{}", serialize.len());
+            file.seek(std::io::SeekFrom::Start(4)).unwrap();
+            file.write_all(&(serialize.len() as u32).to_le_bytes())
+                .unwrap();
+            file.seek(std::io::SeekFrom::Start(8)).unwrap();
+            file.write_all(&serialize).unwrap();
+            file.flush().unwrap();
+            self.writer_drop_barrier.wait();
         }
     }
 
@@ -180,24 +241,15 @@ impl GasFileWriter {
             let mut locations = self.positions.lock().unwrap();
 
             // 每1000次写入记录一次位置
-
             let value2write = if locations.write_positions.len() >= 1000 {
-                let cfg = get_bincode_cfg();
-                let serialize = bincode::encode_to_vec(&locations.write_positions, cfg).unwrap();
-                let write_pos = locations.cur_position;
-                locations.cur_position += serialize.len() as u64;
-
-                locations
-                    .write_positions_meta
-                    .push((cur_pos, serialize.len() as u64));
-                locations.write_positions.clear();
-                Some((write_pos, serialize))
+                Some(
+                    Locations::compute_write_position_and_serial_of_write_positions(&mut locations)
+                        .unwrap(),
+                )
             } else {
                 None
             };
-            locations
-                .write_positions_meta
-                .push((cur_pos, data.len() as u64));
+
             value2write
         };
 
@@ -207,31 +259,9 @@ impl GasFileWriter {
             file.write_all(&serialize).unwrap();
         }
     }
-}
 
-impl Drop for GasFileWriter {
-    fn drop(&mut self) {
-        // 等待所有线程结束
-        let mut handlers = self.handlers.lock().unwrap();
-        for handler in handlers.take().unwrap() {
-            handler.join().unwrap();
-        }
-
-        // 写入一级索引
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .open(&self.fname)
-            .unwrap();
-
-        let cfg = get_bincode_cfg();
-        let serialize =
-            bincode::encode_to_vec(&self.positions.lock().unwrap().write_positions_meta, cfg)
-                .unwrap();
-
-        file.seek(std::io::SeekFrom::Start(4)).unwrap();
-        file.write_all(&(serialize.len() as u32).to_le_bytes())
-            .unwrap();
-        file.write_all(&serialize).unwrap();
+    pub fn wait_for_write_done(self: Arc<Self>) {
+        self.writer_drop_barrier.wait();
     }
 }
 
@@ -252,6 +282,20 @@ impl GasFileReader {
         let mut version_bytes = [0u8; 4];
         file.read_exact(&mut version_bytes).unwrap();
         let version = u32::from_le_bytes(version_bytes);
+
+        let mut meta_len = [0u8; 4];
+        file.seek(std::io::SeekFrom::Start(4)).unwrap();
+        file.read_exact(&mut meta_len).unwrap();
+        let meta_len = u32::from_le_bytes(meta_len);
+        println!("version:{}, metalen:{}", version, meta_len);
+        file.seek(std::io::SeekFrom::Start(8)).unwrap();
+        let mut positions_meta = vec![0_u8; meta_len as usize];
+        file.read_exact(&mut positions_meta).unwrap();
+
+        let (write_positions_meta, nbytes): (WritePositionsMeta, usize) =
+            bincode::decode_from_slice(&positions_meta, get_bincode_cfg()).unwrap();
+        assert_eq!(nbytes, meta_len as usize);
+
         assert_eq!(
             version, GAS_FILE_VERSION,
             "Unsupported gas file version. expected {}, found {}",
@@ -264,7 +308,7 @@ impl GasFileReader {
             Self {
                 fname: p.into(),
                 threads: threads.get(),
-                positions: Mutex::new(Locations::default()),
+                positions: Mutex::new(write_positions_meta.into()),
                 read_sender: Mutex::new(sender.into()),
             }
             .into(),
@@ -273,7 +317,8 @@ impl GasFileReader {
     }
 
     pub fn start_read_worker(self: &Arc<Self>) {
-        if let Some(sender) = self.read_sender.lock().unwrap().take() {
+        let sender = self.read_sender.lock().unwrap().take();
+        if let Some(sender) = sender {
             for _ in 0..self.threads {
                 thread::spawn({
                     let reader = Arc::clone(&self);
@@ -312,7 +357,9 @@ impl GasFileReader {
             let mut position = self.positions.lock().unwrap();
 
             // TODO: check it
-            if position.write_position_cursor + 2 >= position.write_positions.len() {
+            if position.meta_cursor == 0
+                || position.write_position_cursor + 1 >= position.write_positions.len()
+            {
                 // read new write positions
                 if position.meta_cursor >= position.write_positions_meta.len() {
                     return None;
@@ -324,20 +371,66 @@ impl GasFileReader {
                 let (mut write_positions, nbytes): (WritePositions, usize) =
                     bincode::decode_from_slice(&buf, get_bincode_cfg()).unwrap();
                 write_positions.push(start);
+                position.write_positions = write_positions;
 
                 assert_eq!(nbytes, len as usize);
                 position.write_position_cursor = 0;
                 position.meta_cursor += 1;
             }
             let start = position.write_positions[position.write_position_cursor];
-            let len = position.write_positions[position.write_position_cursor] - start;
+            let len = position.write_positions[position.write_position_cursor + 1] - start;
+            position.write_position_cursor += 1;
+
+            println!("reader: start:{},len:{}", start, len);
+
             (start, len)
         };
-
-        file.seek(std::io::SeekFrom::Start(start)).unwrap();
         let mut buf = vec![0; len as usize];
+        file.seek(std::io::SeekFrom::Start(start)).unwrap();
         file.read_exact(&mut buf).unwrap();
 
         Some(buf)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{num::NonZero, time::Duration};
+
+    use tempfile::NamedTempFile;
+
+    use super::{GasFileReader, GasFileWriter, get_bincode_cfg};
+
+    #[test]
+    fn test_gas_rw() {
+        let named_file = NamedTempFile::new().unwrap();
+        let (writer, sender) =
+            GasFileWriter::new_writer(named_file.path(), NonZero::new(2).unwrap());
+        writer.start_write_worker();
+        for i in 0_u32..33559 {
+            sender
+                .send(bincode::encode_to_vec(i, get_bincode_cfg()).unwrap())
+                .unwrap();
+        }
+        drop(sender);
+        writer.wait_for_write_done();
+        // drop(named_file);
+
+        println!("send done");
+        // thread::sleep(Duration::from_secs(2));
+
+        let (reader, recv) = GasFileReader::new_reader(named_file.path(), NonZero::new(2).unwrap());
+        reader.start_read_worker();
+        let mut results = vec![];
+        for v in recv {
+            let (v, _nbytes): (u32, usize) =
+                bincode::decode_from_slice(&v, get_bincode_cfg()).unwrap();
+            println!("v:{}", v);
+            results.push(v);
+        }
+        drop(reader);
+
+        results.sort();
+        println!("{:?}", results);
     }
 }
