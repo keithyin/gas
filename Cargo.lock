@@ -628,6 +628,7 @@ dependencies = [
  "clap",
  "crossbeam",
  "gskits",
+ "libc",
  "rust-htslib",
  "serde",
  "tempfile",
