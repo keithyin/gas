@@ -31,7 +31,7 @@ fn vanilla_file_write(cli: &Cli) {
     let elapsed = instant.elapsed().as_secs() as usize;
     let bytes_per_sec = (data_size / elapsed) as f64;
     let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
-    println!("MB per second: {:.2}", mb_per_sec);
+    println!("MB per second: {:.2}MB/s", mb_per_sec); // 568MB/s
 }
 
 fn main() {
