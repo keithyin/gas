@@ -225,7 +225,7 @@ fn file_write_uring2(cli: &Cli) {
     data.iter_mut().for_each(|v| *v = 'A' as u8);
 
     // Open a file in write mode, creating it if it doesn't exist
-    let file = OpenOptions::new()
+    let mut file = OpenOptions::new()
         .write(true)
         .create(true)
         .custom_flags(libc::O_DIRECT) // Use O_DIRECT for direct I/O
@@ -285,6 +285,11 @@ fn file_write_uring2(cli: &Cli) {
         }
     }
     ring.submit_and_wait(io_depth).unwrap();
+    while let Some(cqe) = ring.completion().next() {
+        let valid_idx = cqe.user_data() as usize;
+        real_buffer[valid_idx].borrow_mut().data_size = 0; // Clear the buffer after use
+    }
+    file.sync_all().expect("Failed to sync file");
     drop(file);
 
     let elapsed = instant.elapsed().as_secs() as usize;
