@@ -243,9 +243,12 @@ fn file_write_uring2(cli: &Cli) {
 
     let rio_buffers = real_buffer
         .iter()
-        .map(|buf| libc::iovec {
-            iov_base: buf.borrow_mut().as_mut_ptr() as *mut _,
-            iov_len: buf.borrow().buffer.len(),
+        .map(|buf| {
+            let buf_len = buf.borrow().buffer.len();
+            libc::iovec {
+                iov_base: buf.borrow_mut().as_mut_ptr() as *mut _,
+                iov_len: buf_len,
+            }
         })
         .collect::<Vec<_>>();
 
