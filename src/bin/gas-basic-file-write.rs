@@ -263,11 +263,8 @@ fn file_write_uring2(cli: &Cli) {
                 .fill_buffer(&data[start..end]);
             let write_event = opcode::Writev::new(
                 types::Fd(file.as_raw_fd()),
-                vec![libc::iovec {
-                    iov_base: real_buffer[valid_idx].borrow_mut().as_mut_ptr() as *mut _,
-                    iov_len: (end - start) as usize,
-                }]
-                .as_ptr(),
+                rio_buffers[valid_idx..valid_idx + 1]
+                    .as_ptr(), // Get the pointer to the first element
                 // (&rio_buffers[valid_idx]) as *const _,
                 1,
             )
