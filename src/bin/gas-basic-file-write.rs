@@ -35,8 +35,8 @@ fn vanilla_file_write(cli: &Cli) {
             .expect("Unable to write data");
         start = end;
     }
-    let elapsed = instant.elapsed().as_secs() as usize;
-    let bytes_per_sec = (data_size / elapsed) as f64;
+    let elapsed = instant.elapsed().as_secs_f64();
+    let bytes_per_sec = (data_size as f64 / elapsed);
     let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
     println!("MB per second: {:.2}MB/s", mb_per_sec); // 568MB/s . 4M block 640MB/s
 }
@@ -76,8 +76,8 @@ fn file_write_dio(cli: &Cli) {
             .expect("Unable to write data");
         start = end;
     }
-    let elapsed = instant.elapsed().as_secs() as usize;
-    let bytes_per_sec = (data_size / elapsed) as f64;
+    let elapsed = instant.elapsed().as_secs_f64();
+    let bytes_per_sec = (data_size as f64 / elapsed);
     let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
     println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block 2.5GB/s
 }
@@ -213,10 +213,10 @@ fn file_write_uring1(cli: &Cli) {
     ring.submit_and_wait(io_depth).unwrap();
     drop(file);
 
-    let elapsed = instant.elapsed().as_secs() as usize;
-    let bytes_per_sec = (data_size / elapsed) as f64;
+    let elapsed = instant.elapsed().as_secs_f64();
+    let bytes_per_sec = (data_size as f64 / elapsed);
     let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
-    println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block 2.5GB/s
+    println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block 10GB/s
 }
 
 fn file_write_uring2(cli: &Cli) {
@@ -243,11 +243,9 @@ fn file_write_uring2(cli: &Cli) {
 
     let rio_buffers = real_buffer
         .iter()
-        .map(|buf| {
-            libc::iovec {
-                iov_base: buf.borrow_mut().as_mut_ptr() as *mut _,
-                iov_len: buf_size,
-            }
+        .map(|buf| libc::iovec {
+            iov_base: buf.borrow_mut().as_mut_ptr() as *mut _,
+            iov_len: buf_size,
         })
         .collect::<Vec<_>>();
 
@@ -295,8 +293,8 @@ fn file_write_uring2(cli: &Cli) {
     file.sync_all().expect("Failed to sync file");
     drop(file);
 
-    let elapsed = instant.elapsed().as_secs() as usize;
-    let bytes_per_sec = (data_size / elapsed) as f64;
+    let elapsed = instant.elapsed().as_secs_f64();
+    let bytes_per_sec = (data_size as f64 / elapsed);
     let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
     println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block 2.5GB/s
 }
