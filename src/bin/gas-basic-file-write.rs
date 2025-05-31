@@ -231,16 +231,24 @@ fn file_write_uring2(cli: &Cli) {
         .custom_flags(libc::O_DIRECT) // Use O_DIRECT for direct I/O
         .open(&cli.out_path)
         .expect("Unable to create file");
+    let io_depth = 8;
 
     let mut start = 0;
     let buf_size = 4 * 1024 * 1024; // 1 MB buffer size
     let instant = Instant::now();
+    let real_buffer = vec![RefCell::new(AlignedBuffer::new(buf_size)); io_depth];
 
     let mut valid_idx_queue = FixedSizeStack::new(8);
     valid_idx_queue.fill_stack(&vec![7, 6, 5, 4, 3, 2, 1, 0]);
 
-    let io_depth = 8;
-    let rio_buffers = vec![RefCell::new(AlignedBuffer::new(buf_size)); io_depth];
+    let rio_buffers = real_buffer
+        .iter()
+        .map(|buf| libc::iovec {
+            iov_base: buf.borrow_mut().as_mut_ptr() as *mut _,
+            iov_len: buf.borrow().buffer.len(),
+        })
+        .collect::<Vec<_>>();
+
     let mut ring = IoUring::new(io_depth as u32).expect("Failed to create IoUring");
 
     // init completions
@@ -248,13 +256,13 @@ fn file_write_uring2(cli: &Cli) {
         // Write data to the file
         let end = std::cmp::min(start + buf_size, data.len());
         if let Some(valid_idx) = valid_idx_queue.pop() {
-            rio_buffers[valid_idx]
+            real_buffer[valid_idx]
                 .borrow_mut()
                 .clear_buf()
                 .fill_buffer(&data[start..end]);
-            let write_event = opcode::Write::new(
+            let write_event = opcode::Writev::new(
                 types::Fd(file.as_raw_fd()),
-                rio_buffers[valid_idx].borrow_mut().as_mut_ptr(),
+                (&rio_buffers[valid_idx]) as *const _,
                 (end - start) as u32,
             )
             .offset(start as u64)
