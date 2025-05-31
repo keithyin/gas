@@ -109,7 +109,7 @@ impl AlignedBuffer {
     }
 
     fn as_mut_ptr(&mut self) -> *mut u8 {
-        (self.buffer[..self.data_size]).as_mut_ptr()
+        self.buffer.as_mut_ptr()
     }
 }
 
