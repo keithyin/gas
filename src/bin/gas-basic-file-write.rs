@@ -19,6 +19,18 @@ pub struct Cli {
     pub mode: String,
 }
 
+/*
+  Round 1...
+MB per second: 623.05MB/s
+  Round 2...
+MB per second: 737.15MB/s
+  Round 3...
+MB per second: 748.09MB/s
+  Round 4...
+MB per second: 736.46MB/s
+  Round 5...
+MB per second: 742.95MB/s
+*/
 fn vanilla_file_write(cli: &Cli) {
     let data_size = 1024 * 1024 * 1024 * 10; // 2 GB
     let data = vec![0_u8; data_size];
@@ -55,6 +67,18 @@ fn aligned_alloc(size: usize) -> Vec<u8> {
     }
 }
 
+/*
+  Round 1...
+MB per second: 1471.01MB/s
+  Round 2...
+MB per second: 1604.04MB/s
+  Round 3...
+MB per second: 1740.70MB/s
+  Round 4...
+MB per second: 1487.76MB/s
+  Round 5...
+MB per second: 1384.34MB/s
+*/
 fn file_write_dio(cli: &Cli) {
     let data_size = 1024 * 1024 * 1024 * 20; // 2 GB
     let data = aligned_alloc(data_size);
@@ -156,6 +180,18 @@ impl FixedSizeStack {
     }
 }
 
+/*
+  Round 1...
+MB per second: 6121.26MB/s
+  Round 2...
+MB per second: 6299.68MB/s
+  Round 3...
+MB per second: 6547.50MB/s
+  Round 4...
+MB per second: 6547.28MB/s
+  Round 5...
+MB per second: 6524.73MB/s
+*/
 fn file_write_uring1(cli: &Cli) {
     let data_size = 1024 * 1024 * 1024 * 20; // 2 GB
     let mut data = aligned_alloc(data_size);
@@ -219,7 +255,18 @@ fn file_write_uring1(cli: &Cli) {
     println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block 5.7GB/s
 }
 
-/// 不知道为啥，这个写出的文件是空的
+/*
+ Round 1...
+MB per second: 5043.00MB/s
+  Round 2...
+MB per second: 5100.70MB/s
+  Round 3...
+MB per second: 6494.81MB/s
+  Round 4...
+MB per second: 1474.20MB/s
+  Round 5...
+MB per second: 5077.73MB/s
+*/
 fn file_write_uring2(cli: &Cli) {
     let data_size = 1024 * 1024 * 1024 * 20; // 2 GB
     let mut data = aligned_alloc(data_size);
