@@ -268,7 +268,7 @@ fn file_write_uring2(cli: &Cli) {
                     iov_len: (end - start) as usize,
                 }) as *const _,
                 // (&rio_buffers[valid_idx]) as *const _,
-                (end - start) as u32,
+                1,
             )
             .offset(start as u64)
             .build()
