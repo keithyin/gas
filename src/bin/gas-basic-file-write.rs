@@ -264,7 +264,11 @@ fn file_write_uring2(cli: &Cli) {
                 .fill_buffer(&data[start..end]);
             let write_event = opcode::Writev::new(
                 types::Fd(file.as_raw_fd()),
-                (&rio_buffers[valid_idx]) as *const _,
+                (&libc::iovec {
+                    iov_base: real_buffer[valid_idx].borrow_mut().as_mut_ptr() as *mut _,
+                    iov_len: (end - start) as usize,
+                }) as *const _,
+                // (&rio_buffers[valid_idx]) as *const _,
                 (end - start) as u32,
             )
             .offset(start as u64)
