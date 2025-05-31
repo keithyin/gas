@@ -628,6 +628,7 @@ dependencies = [
  "clap",
  "crossbeam",
  "gskits",
+ "io-uring",
  "libc",
  "rust-htslib",
  "serde",
@@ -879,6 +880,17 @@ dependencies = [
  "portable-atomic",
  "unicode-width",
  "web-time",
+]
+
+[[package]]
+name = "io-uring"
+version = "0.7.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ebb93303c65a11753dd0e45cd6bfa5c65ee1f0b9f8e2178b6998ddc8b284f04"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]

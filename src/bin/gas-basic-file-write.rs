@@ -1,8 +1,16 @@
 // Write some text to the file
 
-use std::{fs::OpenOptions, io::Write, os::unix::fs::OpenOptionsExt, time::Instant};
+use std::{
+    cell::RefCell,
+    fs::OpenOptions,
+    io::Write,
+    ops::DerefMut,
+    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    time::Instant,
+};
 
 use clap::Parser;
+use io_uring::{IoUring, opcode, types};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -75,11 +83,93 @@ fn file_write_dio(cli: &Cli) {
     println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block 2.5GB/s
 }
 
-fn file_write_rio(cli: &Cli) {
+#[derive(Debug, Clone)]
+struct AlignedBuffer {
+    buffer: Vec<u8>,
+    data_size: usize,
+}
+impl AlignedBuffer {
+    fn new(buf_size: usize) -> Self {
+        let buffer = aligned_alloc(buf_size);
+        Self {
+            buffer,
+            data_size: 0,
+        }
+    }
+
+    fn as_slice(&self) -> &[u8] {
+        &self.buffer[0..self.data_size]
+    }
+
+    fn fill_buffer(&mut self, data: &[u8]) -> usize {
+        let remaining = self.buffer.len() - self.data_size;
+        let to_cpy = remaining.min(data.len());
+        self.buffer[self.data_size..self.data_size + to_cpy].copy_from_slice(&data[..to_cpy]);
+        data.len() - to_cpy
+    }
+
+    fn clear_buf(&mut self) -> &mut Self {
+        self.data_size = 0;
+        self
+    }
+}
+
+impl AsRef<[u8]> for AlignedBuffer {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+struct FixedSizeStack {
+    stack: Vec<usize>,
+    cur_top: usize,
+}
+
+impl FixedSizeStack {
+    fn new(size: usize) -> Self {
+        Self {
+            stack: Vec::with_capacity(size),
+            cur_top: 0,
+        }
+    }
+
+    fn fill_stack(&mut self, data: &[usize]) {
+        for &item in data {
+            if self.cur_top < self.stack.capacity() {
+                self.stack.push(item);
+                self.cur_top += 1;
+            } else {
+                panic!("Stack overflow");
+            }
+        }
+    }
+
+    fn push(&mut self, item: usize) {
+        if self.cur_top < self.stack.capacity() {
+            self.stack.push(item);
+            self.cur_top += 1;
+        } else {
+            panic!("Stack overflow");
+        }
+    }
+
+    fn pop(&mut self) -> Option<usize> {
+        if self.cur_top > 0 {
+            self.cur_top -= 1;
+            self.stack.pop()
+        } else {
+            None
+        }
+    }
+}
+
+fn file_write_uring1(cli: &Cli) {
     let data_size = 1024 * 1024 * 1024 * 10; // 2 GB
-    let data = aligned_alloc(data_size);
+    let mut data = aligned_alloc(data_size);
+    data.iter_mut().for_each(|v| *v = 'A' as u8);
+
     // Open a file in write mode, creating it if it doesn't exist
-    let mut file = OpenOptions::new()
+    let file = OpenOptions::new()
         .write(true)
         .create(true)
         .custom_flags(libc::O_DIRECT) // Use O_DIRECT for direct I/O
@@ -89,13 +179,46 @@ fn file_write_rio(cli: &Cli) {
     let mut start = 0;
     let buf_size = 4 * 1024 * 1024; // 1 MB buffer size
     let instant = Instant::now();
+
+    let mut valid_idx_queue = FixedSizeStack::new(8);
+    valid_idx_queue.fill_stack(&vec![7, 6, 5, 4, 3, 2, 1, 0]);
+
+    let io_depth = 8;
+    let rio_buffers = vec![RefCell::new(AlignedBuffer::new(buf_size)); io_depth];
+    let mut ring = IoUring::new(io_depth as u32).expect("Failed to create IoUring");
+
+    // init completions
     while start < data.len() {
         // Write data to the file
         let end = std::cmp::min(start + buf_size, data.len());
-        file.write_all(&data[start..end])
-            .expect("Unable to write data");
-        start = end;
+        if let Some(valid_idx) = valid_idx_queue.pop() {
+            rio_buffers[valid_idx]
+                .borrow_mut()
+                .clear_buf()
+                .fill_buffer(&data[start..end]);
+            let write_event = opcode::Write::new(
+                types::Fd(file.as_raw_fd()),
+                rio_buffers[valid_idx].borrow_mut().buffer.as_mut_ptr(),
+                (end - start) as u32,
+            )
+            .build()
+            .user_data(valid_idx as u64);
+
+            unsafe {
+                ring.submission()
+                    .push(&write_event)
+                    .expect("Failed to push write event");
+            }
+            start = end;
+        } else {
+            ring.submit_and_wait(1).unwrap();
+            let cqe = ring.completion().next().expect("No completion event");
+            valid_idx_queue.push(cqe.user_data() as usize);
+        }
     }
+    ring.submit_and_wait(io_depth).unwrap();
+    drop(file);
+
     let elapsed = instant.elapsed().as_secs() as usize;
     let bytes_per_sec = (data_size / elapsed) as f64;
     let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
@@ -107,7 +230,7 @@ fn main() {
     match cli.mode.as_str() {
         "vanilla" => vanilla_file_write(&cli),
         "dio" => file_write_dio(&cli),
-        "rio" => file_write_rio(&cli),
+        "uring1" => file_write_uring1(&cli),
         _ => panic!("Unknown mode: {}", cli.mode),
     }
 }
