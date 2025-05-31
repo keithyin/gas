@@ -296,7 +296,7 @@ fn main() {
         "vanilla" => vanilla_file_write(&cli),
         "dio" => file_write_dio(&cli),
         "uring1" => file_write_uring1(&cli),
-        "uring2" => file_write_uring1(&cli),
+        "uring2" => file_write_uring2(&cli),
         _ => panic!("Unknown mode: {}", cli.mode),
     }
 }
