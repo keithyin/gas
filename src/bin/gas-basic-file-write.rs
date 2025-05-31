@@ -79,7 +79,7 @@ fn file_write_dio(cli: &Cli) {
     let elapsed = instant.elapsed().as_secs_f64();
     let bytes_per_sec = (data_size as f64 / elapsed);
     let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
-    println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block 2.5GB/s
+    println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block 1.5GB/s
 }
 
 #[derive(Debug, Clone)]
@@ -216,9 +216,10 @@ fn file_write_uring1(cli: &Cli) {
     let elapsed = instant.elapsed().as_secs_f64();
     let bytes_per_sec = (data_size as f64 / elapsed);
     let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
-    println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block 10GB/s
+    println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block 5.7GB/s
 }
 
+/// 不知道为啥，这个写出的文件是空的
 fn file_write_uring2(cli: &Cli) {
     let data_size = 1024 * 1024 * 1024 * 10; // 2 GB
     let mut data = aligned_alloc(data_size);
@@ -296,7 +297,7 @@ fn file_write_uring2(cli: &Cli) {
     let elapsed = instant.elapsed().as_secs_f64();
     let bytes_per_sec = (data_size as f64 / elapsed);
     let mb_per_sec = bytes_per_sec / (1024.0 * 1024.0);
-    println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block 2.5GB/s
+    println!("MB per second: {:.2}MB/s", mb_per_sec); // 4M block ？？？
 }
 
 fn main() {
