@@ -56,7 +56,7 @@ fn aligned_alloc(size: usize) -> Vec<u8> {
 }
 
 fn file_write_dio(cli: &Cli) {
-    let data_size = 1024 * 1024 * 1024 * 10; // 2 GB
+    let data_size = 1024 * 1024 * 1024 * 20; // 2 GB
     let data = aligned_alloc(data_size);
     // Open a file in write mode, creating it if it doesn't exist
     let mut file = OpenOptions::new()
@@ -157,7 +157,7 @@ impl FixedSizeStack {
 }
 
 fn file_write_uring1(cli: &Cli) {
-    let data_size = 1024 * 1024 * 1024 * 10; // 2 GB
+    let data_size = 1024 * 1024 * 1024 * 20; // 2 GB
     let mut data = aligned_alloc(data_size);
     data.iter_mut().for_each(|v| *v = 'A' as u8);
 
@@ -221,7 +221,7 @@ fn file_write_uring1(cli: &Cli) {
 
 /// 不知道为啥，这个写出的文件是空的
 fn file_write_uring2(cli: &Cli) {
-    let data_size = 1024 * 1024 * 1024 * 10; // 2 GB
+    let data_size = 1024 * 1024 * 1024 * 20; // 2 GB
     let mut data = aligned_alloc(data_size);
     data.iter_mut().for_each(|v| *v = 'A' as u8);
 
